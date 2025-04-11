@@ -1,4 +1,4 @@
-process alignment {
+process BWAMEM2_ALIGN {
     tag "$sample_id"
     publishDir "${params.outdir}/alignment", mode: params.publish_dir_mode
     cpus 24

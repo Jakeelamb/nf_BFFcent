@@ -1,16 +1,16 @@
 #!/usr/bin/env nextflow
 
 // Import modules
-include { ref_index } from './modules/local/ref_index'
-include { FASTP } from './modules/local/fastp'
-include { alignment } from './modules/local/alignment'
-include { samtools } from './modules/local/samtools'
-include { gatk_haplotype } from './modules/local/gatk_haplotype'
-include { gatk_pipe } from './modules/local/gatk_pipe'
-include { plink2 } from './modules/local/plink2'
+include { REFERENCE_INDEX } from './modules/local/reference_index'
+include { FASTP_TRIM } from './modules/local/fastp_trim'
+include { BWAMEM2_ALIGN } from './modules/local/bwamem2_align'
+include { SAMTOOLS_PROCESS } from './modules/local/samtools_process'
+include { GATK_HAPLOTYPECALLER } from './modules/local/gatk_haplotypecaller'
+include { GATK_JOINT_GENOTYPE } from './modules/local/gatk_joint_genotype'
+include { PLINK2_ANALYSIS } from './modules/local/plink2_analysis'
 
 // Define a process to collect readgroup info
-process collectReadGroupInfo {
+process READGROUP_COLLECT {
     publishDir "${params.outdir}/readgroups", mode: params.publish_dir_mode
     
     input:
@@ -65,59 +65,59 @@ workflow {
     ref_genome_fasta_index = file("${params.reference_genome}.fai")
     
     // Run reference indexing if needed
-    ref_index(tuple(ref_genome, ref_genome_dict, ref_genome_fasta_index))
+    REFERENCE_INDEX(tuple(ref_genome, ref_genome_dict, ref_genome_fasta_index))
     
     // Trimming can start immediately
-    FASTP(samples_ch)
+    FASTP_TRIM(samples_ch)
     
     // Alignment needs indexed reference genome
     // Combine the trimmed reads with indexed reference
-    FASTP.out.trimmed_reads
-        .combine(ref_index.out.indexed_ref.first())
+    FASTP_TRIM.out.trimmed_reads
+        .combine(REFERENCE_INDEX.out.indexed_ref.first())
         .map { it -> [it[0], it[1], it[2]] }
         .set { reads_and_ref }
     
     // Run alignment with reference dependency
-    alignment(reads_and_ref)
+    BWAMEM2_ALIGN(reads_and_ref)
     
     // Collect and combine all readgroup info files
-    alignment.out.readgroup_info
+    BWAMEM2_ALIGN.out.readgroup_info
         .collect()
         .set { all_readgroup_info }
     
     // Generate combined readgroup report
-    collectReadGroupInfo(all_readgroup_info)
+    READGROUP_COLLECT(all_readgroup_info)
     
     // SAM/BAM processing
-    samtools(alignment.out.bam_files)
+    SAMTOOLS_PROCESS(BWAMEM2_ALIGN.out.bam_files)
     
     // Wait for all samples to complete processing before running variant calling
     // Combine with reference genome for GATK
-    samtools.out.processed_bam
-        .combine(ref_index.out.indexed_ref.first())
+    SAMTOOLS_PROCESS.out.processed_bam
+        .combine(REFERENCE_INDEX.out.indexed_ref.first())
         .map { sample_id, bam, ref, dict, fai -> [sample_id, bam, ref] }
         .set { all_processed_bams_with_ref }
     
     // Variant calling with reference genome
-    gatk_haplotype(all_processed_bams_with_ref)
+    GATK_HAPLOTYPECALLER(all_processed_bams_with_ref)
     
     // Collect all GVCF files for joint genotyping
-    gatk_haplotype.out.gvcfs
+    GATK_HAPLOTYPECALLER.out.gvcfs
         .map { sample_id, gvcf, idx -> gvcf }
         .collect()
         .set { all_gvcfs }
     
     // Get reference for joint genotyping
-    ref_index.out.indexed_ref
+    REFERENCE_INDEX.out.indexed_ref
         .first()
         .map { ref, dict, fai -> [ref, dict, fai] }
         .set { indexed_ref_for_gatk }
     
     // Joint genotyping and filtering
-    gatk_pipe(all_gvcfs, indexed_ref_for_gatk)
+    GATK_JOINT_GENOTYPE(all_gvcfs, indexed_ref_for_gatk)
     
     // Population genetics analysis
-    plink2(gatk_pipe.out.filtered_vcf)
+    PLINK2_ANALYSIS(GATK_JOINT_GENOTYPE.out.filtered_vcf)
 }
 
 // Log workflow completion

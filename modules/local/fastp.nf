@@ -1,4 +1,4 @@
-process FASTP {
+process FASTP_TRIM {
     tag "$sample_id"
     publishDir "${params.outdir}/trimming", mode: params.publish_dir_mode
     cpus 4

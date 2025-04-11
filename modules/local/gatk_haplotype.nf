@@ -1,4 +1,4 @@
-process gatk_haplotype {
+process GATK_HAPLOTYPECALLER {
     tag "$sample_id"
     publishDir "${params.outdir}/gatk_haplotype", mode: params.publish_dir_mode
     cpus 28

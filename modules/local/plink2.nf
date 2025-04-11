@@ -1,4 +1,4 @@
-process plink2 {
+process PLINK2_ANALYSIS {
     tag "population_analysis"
     publishDir "${params.outdir}/plink2", mode: params.publish_dir_mode
     cpus 16

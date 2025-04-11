@@ -1,4 +1,4 @@
-process gatk_pipe {
+process GATK_JOINT_GENOTYPE {
     tag "joint_genotyping"
     publishDir "${params.outdir}/gatk_pipe", mode: params.publish_dir_mode
     cpus 32

@@ -1,4 +1,4 @@
-process samtools {
+process SAMTOOLS_PROCESS {
     tag "$sample_id"
     publishDir "${params.outdir}/samtools", mode: params.publish_dir_mode
     cpus 24
