@@ -15,7 +15,7 @@ This pipeline performs the following steps:
 ## Requirements
 
 - Nextflow 21.10.0 or later
-- Conda or Mamba
+- Conda or Mamba (recommended for faster environment creation)
 - SLURM workload manager (optional, for HPC execution)
 
 ## Usage
@@ -28,12 +28,11 @@ git clone https://github.com/yourusername/nf_BFFcent.git
 cd nf_BFFcent
 ```
 
-### 2. Create the Conda environment
+### 2. Conda Environment
 
-```bash
-conda env create -f environment.yml
-conda activate BFFcent
-```
+The pipeline will automatically create and manage the required Conda environment using the provided `environment.yml` file. The environment will be created during the first run and reused in subsequent runs, so you don't need to manually create it.
+
+If you want to make changes to the environment, simply edit the `environment.yml` file before running the pipeline.
 
 ### 3. Sample file preparation
 
