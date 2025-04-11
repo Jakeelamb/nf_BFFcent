@@ -27,18 +27,3 @@ process GATK_HAPLOTYPECALLER {
     gatk IndexFeatureFile -I "${sample_id}.g.vcf.gz"
     """
 }
-
-
-
-script:
-    """
-
-gatk --java-options "-Xmx110g -Djava.io.tmpdir=$SLURM_SCRATCH" HaplotypeCaller \
-    -R "${REF_GENOME}" \
-    -I "${input_bam}" \
-    -O "${GATK_DIR}/${sample_name}.g.vcf.gz" \
-    --native-pair-hmm-threads 28 \
-    -ERC GVCF
-
-    
-    """

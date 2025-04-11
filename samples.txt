@@ -1,4 +1,2 @@
 sample_id	read1	read2
-BFFcent_01	/path/to/BFFcent_01_R1.fastq.gz	/path/to/BFFcent_01_R2.fastq.gz
-BFFcent_02	/path/to/BFFcent_02_R1.fastq.gz	/path/to/BFFcent_02_R2.fastq.gz
-BFFcent_03	/path/to/BFFcent_03_R1.fastq.gz	/path/to/BFFcent_03_R2.fastq.gz
+MSB127012	/home/jake/Projects/nf_BFFcent/MSB127012_1.fastq.gz	/home/jake/Projects/nf_BFFcent/MSB127012_2.fastq.gz

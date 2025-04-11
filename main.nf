@@ -61,8 +61,9 @@ workflow {
     
     // Reference genome processing
     ref_genome = file(params.reference_genome)
-    ref_genome_dict = file("${params.reference_genome.replaceFirst(/\.fa(sta)?$/, '.dict')}")
-    ref_genome_fasta_index = file("${params.reference_genome}.fai")
+    ref_base = params.reference_genome.replaceFirst(/\.gz$/, '')
+    ref_genome_dict = file("${ref_base}.dict")
+    ref_genome_fasta_index = file("${ref_base}.fai")
     
     // Run reference indexing if needed
     REFERENCE_INDEX(tuple(ref_genome, ref_genome_dict, ref_genome_fasta_index))
