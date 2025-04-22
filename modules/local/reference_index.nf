@@ -1,7 +1,7 @@
 process REFERENCE_INDEX {
     publishDir "$params.outdir/ref_index", mode: params.publish_dir_mode
     cpus 4
-    memory '32 GB'
+    memory '128 GB'
     time '24h'
 
     input:

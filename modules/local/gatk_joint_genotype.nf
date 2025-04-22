@@ -1,69 +1,84 @@
 process GATK_JOINT_GENOTYPE {
-    tag "joint_genotyping"
+    tag "Interval $interval"
     publishDir "${params.outdir}/gatk_pipe", mode: params.publish_dir_mode
     cpus 32
-    memory '64 GB'
-    time '24h'
+    memory '120 GB'
+    time '156h'
 
     input:
-    path gvcfs
-    tuple path(ref_genome), path(ref_genome_dict), path(ref_genome_fasta_index)
+    tuple val(interval), path(sample_map), path(reference, stageAs: "genome.fa")
 
     output:
-    path "filtered_snps.vcf.gz", emit: filtered_vcf
-    path "filtered_snps.vcf.gz.tbi", emit: filtered_vcf_index
+    tuple val(interval), path("${interval}.filtered.vcf.gz"), path("${interval}.filtered.vcf.gz.tbi"), emit: filtered_vcf_interval
 
     script:
-    // Create GVCF parameters string
-    def gvcf_params = gvcfs.collect { "-V $it" }.join(' ')
+    def mem = task.memory ? task.memory.toGiga() : 120
     """
-    # Create temporary directory
-    mkdir -p temp
-    mkdir -p gendb
-
-    # Step 1: Import GVCFs to GenomicsDB
-    gatk --java-options "-Xmx${task.memory.toGiga() - 10}g -Djava.io.tmpdir=temp" GenomicsDBImport \\
-        ${gvcf_params} \\
-        --genomicsdb-workspace-path "gendb" \\
+    #!/bin/bash
+    set -e -o pipefail
+    
+    # List current directory for debugging
+    echo "Contents of working directory before symlinks:"
+    ls -la > workdir_contents_before.txt
+    
+    # Define reference path variables
+    REF_PATH="${params.reference_genome}"
+    REF_DIR=\$(dirname "\$REF_PATH")
+    REF_NAME=\$(basename "\$REF_PATH")
+    REF_BASE=\$(echo "\$REF_NAME" | sed 's/\\.[^.]*\$//')
+    
+    # Create symlink for .fai index
+    ln -s "\${REF_PATH}.fai" "genome.fa.fai"
+    if [ ! -e "genome.fa.fai" ]; then
+        echo "Error: genome.fa.fai not found. Check if \${REF_PATH}.fai exists."
+        exit 1
+    fi
+    
+    # Create symlink for .dict file
+    ln -s "\${REF_DIR}/\${REF_BASE}.dict" "genome.dict"
+    if [ ! -e "genome.dict" ]; then
+        echo "Error: genome.dict not found. Check if \${REF_DIR}/\${REF_BASE}.dict exists."
+        exit 1
+    fi
+    
+    # List current directory after linking for debugging
+    echo "Contents of working directory after symlinks:"
+    ls -la > workdir_contents_after.txt
+    
+    # Create a unique workspace for this interval
+    WORKSPACE="genomicsdb_${interval}"
+    
+    # Create tmp directory
+    mkdir -p ./tmp
+    
+    # Import GVCFs to GenomicsDB
+    echo "Starting GenomicsDBImport for interval ${interval}..."
+    gatk --java-options "-Xmx${mem}g -Djava.io.tmpdir=./tmp" GenomicsDBImport \\
+        --genomicsdb-workspace-path \$WORKSPACE \\
         --batch-size 50 \\
-        --interval-padding 100 \\
-        --intervals "${workflow.projectDir}/intervals_chromo_only_nopos.list" \\
-        --genomicsdb-shared-posixfs-optimizations \\
-        --reader-threads 2
+        -L ${interval} \\
+        --sample-name-map ${sample_map} \\
+        --reader-threads ${Math.max(1, task.cpus/4 as int)} \\
+        --max-num-intervals-to-import-in-parallel ${Math.max(1, task.cpus/8 as int)}
 
-    # Step 2: GenotypeGVCFs
-    gatk --java-options "-Xmx${task.memory.toGiga() - 10}g -Djava.io.tmpdir=temp" GenotypeGVCFs \\
-        -R "${ref_genome}" \\
-        -V "gendb://gendb" \\
-        -O "raw_variants.vcf.gz" \\
-        --reader-threads 2
+    # Run joint genotyping on the interval
+    echo "Starting GenotypeGVCFs for interval ${interval}..."
+    gatk --java-options "-Xmx${mem}g -Djava.io.tmpdir=./tmp" GenotypeGVCFs \\
+        -R genome.fa \\
+        -V gendb://\$WORKSPACE \\
+        -O ${interval}.vcf.gz \\
+        -L ${interval} \\
+        --tmp-dir=./tmp
 
-    # Step 3: Select and filter SNPs
-    gatk --java-options "-Xmx${task.memory.toGiga() - 10}g -Djava.io.tmpdir=temp" SelectVariants \\
-        -R "${ref_genome}" \\
-        -V "raw_variants.vcf.gz" \\
-        --select-type-to-include SNP \\
-        -O "raw_snps.vcf.gz"
-
-    gatk --java-options "-Xmx${task.memory.toGiga() - 10}g -Djava.io.tmpdir=temp" VariantFiltration \\
-        -R "${ref_genome}" \\
-        -V "raw_snps.vcf.gz" \\
-        -filter "QD < 2.0" --filter-name "QD2" \\
-        -filter "QUAL < 30.0" --filter-name "QUAL30" \\
-        -filter "SOR > 3.0" --filter-name "SOR3" \\
-        -filter "FS > 60.0" --filter-name "FS60" \\
-        -filter "MQ < 40.0" --filter-name "MQ40" \\
-        -filter "MQRankSum < -12.5" --filter-name "MQRankSum-12.5" \\
-        -filter "ReadPosRankSum < -8.0" --filter-name "ReadPosRankSum-8" \\
-        -filter "AF < 0.05" --filter-name "minMAF" \\
-        -filter "DP < 5 || DP > 100" --filter-name "Depth" \\
-        -O "temp_filtered_snps.vcf.gz"
-
-    gatk SelectVariants \\
-        -V "temp_filtered_snps.vcf.gz" \\
-        --select-type-to-include SNP \\
-        --restrict-alleles-to BIALLELIC \\
-        --exclude-filtered true \\
-        -O "filtered_snps.vcf.gz"
+    # Apply variant filtration
+    echo "Starting VariantFiltration for interval ${interval}..."
+    gatk --java-options "-Xmx${mem}g -Djava.io.tmpdir=./tmp" VariantFiltration \\
+        -R genome.fa \\
+        -V ${interval}.vcf.gz \\
+        -O ${interval}.filtered.vcf.gz \\
+        --filter-expression "QD < 2.0 || FS > 60.0 || MQ < 40.0 || MQRankSum < -12.5 || ReadPosRankSum < -8.0" \\
+        --filter-name "basic_snp_filter"
+        
+    echo "Completed processing for interval ${interval}"
     """
 }

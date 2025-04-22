@@ -1,26 +1,26 @@
 process FASTP_TRIM {
-    tag "$sample_id"
+    tag "$meta.id"
     publishDir "${params.outdir}/trimming", mode: params.publish_dir_mode
     cpus 4
     memory '8 GB'
     time '4h'
 
     input:
-    tuple val(sample_id), path(reads)
+    tuple val(meta), path(reads)
 
     output:
-    tuple val(sample_id), path("${sample_id}_trimmed_R{1,2}.fastq.gz"), emit: trimmed_reads
-    path "${sample_id}_fastp.{html,json}", emit: report
+    tuple val(meta), path("${meta.id}_trimmed_R{1,2}.fastq.gz"), emit: trimmed_reads
+    path "${meta.id}_fastp.{html,json}", emit: report
 
     script:
     """
     fastp \\
         -i ${reads[0]} \\
         -I ${reads[1]} \\
-        -o ${sample_id}_trimmed_R1.fastq.gz \\
-        -O ${sample_id}_trimmed_R2.fastq.gz \\
-        --html ${sample_id}_fastp.html \\
-        --json ${sample_id}_fastp.json \\
+        -o ${meta.id}_trimmed_R1.fastq.gz \\
+        -O ${meta.id}_trimmed_R2.fastq.gz \\
+        --html ${meta.id}_fastp.html \\
+        --json ${meta.id}_fastp.json \\
         --detect_adapter_for_pe \\
         --dedup \\
         -w ${task.cpus} \\

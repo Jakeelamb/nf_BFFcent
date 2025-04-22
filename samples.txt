@@ -1,2 +1,0 @@
-sample_id	read1	read2
-MSB127012	/home/jake/Projects/nf_BFFcent/MSB127012_1.fastq.gz	/home/jake/Projects/nf_BFFcent/MSB127012_2.fastq.gz

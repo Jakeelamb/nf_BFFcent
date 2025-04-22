@@ -1,129 +1,169 @@
 #!/usr/bin/env nextflow
 
-// Import modules
-include { REFERENCE_INDEX } from './modules/local/reference_index'
+nextflow.enable.dsl=2
+
+// Define Parameters
+params.reads = "samples.txt" // Input samplesheet (sample,fastq_1,fastq_2)
+params.reference_genome = "$projectDir/reference/Zmays_833_Zm-B73-REFERENCE-NAM-5.0.fa" // Reference genome in reference directory
+params.intervals_file = "intervals_chromo_only_nopos.list" // File listing intervals (1-10)
+params.outdir = "./results"
+params.publish_dir_mode = 'copy' // Or 'link', 'rellink', etc.
+
+// Define Log Level
+log.info """\
+         V A R I A N T - C A L L I N G   P I P E L I N E
+         ================================================
+         reads              : ${params.reads}
+         reference_genome   : ${params.reference_genome}
+         intervals          : ${params.intervals_file}
+         outdir             : ${params.outdir}
+         ------------------------------------------------
+         """
+         .stripIndent()
+
+// Include Modules
+include { EXTRACT_FASTQ_METADATA } from './modules/local/extract_fastq_metadata'
 include { FASTP_TRIM } from './modules/local/fastp_trim'
 include { BWAMEM2_ALIGN } from './modules/local/bwamem2_align'
 include { SAMTOOLS_PROCESS } from './modules/local/samtools_process'
 include { GATK_HAPLOTYPECALLER } from './modules/local/gatk_haplotypecaller'
+include { REFERENCE_INDEX } from './modules/local/reference_index'
+include { CREATE_SAMPLE_MAP } from './modules/local/create_sample_map'
 include { GATK_JOINT_GENOTYPE } from './modules/local/gatk_joint_genotype'
 include { PLINK2_ANALYSIS } from './modules/local/plink2_analysis'
+include { CONCAT_GVCFS } from './modules/local/concat_gvcfs'
 
-// Define a process to collect readgroup info
-process READGROUP_COLLECT {
-    publishDir "${params.outdir}/readgroups", mode: params.publish_dir_mode
-    
-    input:
-    path(readgroup_files)
-    
-    output:
-    path "combined_readgroup_info.txt"
-    
-    script:
-    """
-    # Get the header from the first file
-    head -n 2 ${readgroup_files[0]} > combined_readgroup_info.txt
-    
-    # Concatenate the data from all files, skipping headers
-    for file in ${readgroup_files}; do
-        if [ "\$file" != "${readgroup_files[0]}" ]; then
-            tail -n +3 \$file >> combined_readgroup_info.txt
-        else
-            tail -n +3 \$file >> combined_readgroup_info.txt
-        fi
-    done
-    
-    # Add summary information
-    echo -e "\\nSummary:" >> combined_readgroup_info.txt
-    echo "--------" >> combined_readgroup_info.txt
-    total_samples=\$(grep -v "Sample\\|===" combined_readgroup_info.txt | wc -l)
-    echo "Total samples processed: \$total_samples" >> combined_readgroup_info.txt
-    
-    # Perform validation
-    echo -e "\\nValidation Checks:" >> combined_readgroup_info.txt
-    echo "----------------" >> combined_readgroup_info.txt
-    if grep -P "\\t\\t" combined_readgroup_info.txt > /dev/null; then
-        echo "WARNING: Some entries have missing values. Please review the output." >> combined_readgroup_info.txt
-    else
-        echo "All entries have complete information." >> combined_readgroup_info.txt
-    fi
-    """
-}
-
-// Define workflow
+// Workflow Definition
 workflow {
-    // Parse input samples
-    Channel
-        .fromPath(params.input)
+
+    // --- Input Channels ---
+    ch_reads = Channel.fromPath(params.reads)
         .splitCsv(header: true, sep: '\t')
-        .map { row -> tuple(row.sample_id, [file(row.read1), file(row.read2)]) }
-        .set { samples_ch }
+        .map { row -> 
+            def meta = [id: row.sample_id]
+            def read1 = file(row.read1, checkIfExists: true)
+            def read2 = file(row.read2, checkIfExists: true)
+            
+            [ meta, [read1, read2] ]
+        }
     
-    // Reference genome processing
-    ref_genome = file(params.reference_genome)
-    ref_base = params.reference_genome.replaceFirst(/\.gz$/, '')
-    ref_genome_dict = file("${ref_base}.dict")
-    ref_genome_fasta_index = file("${ref_base}.fai")
+    ch_intervals = Channel.fromPath(params.intervals_file).splitText().map { it.trim() }.filter { it } // Emits interval names
     
-    // Run reference indexing if needed
-    REFERENCE_INDEX(tuple(ref_genome, ref_genome_dict, ref_genome_fasta_index))
-    
-    // Trimming can start immediately
-    FASTP_TRIM(samples_ch)
-    
-    // Alignment needs indexed reference genome
-    // Combine the trimmed reads with indexed reference
-    FASTP_TRIM.out.trimmed_reads
-        .combine(REFERENCE_INDEX.out.indexed_ref.first())
-        .map { it -> [it[0], it[1], it[2]] }
-        .set { reads_and_ref }
-    
-    // Run alignment with reference dependency
-    BWAMEM2_ALIGN(reads_and_ref)
-    
-    // Collect and combine all readgroup info files
-    BWAMEM2_ALIGN.out.readgroup_info
-        .collect()
-        .set { all_readgroup_info }
-    
-    // Generate combined readgroup report
-    READGROUP_COLLECT(all_readgroup_info)
-    
-    // SAM/BAM processing
+    // Reference genome file
+    ch_ref_input = Channel.value(file(params.reference_genome, checkIfExists: true))
+
+    // --- Step 0: Index Reference Genome ---
+    // Create paths for expected index/dict files based on reference genome path
+    def ref_file = file(params.reference_genome)
+    def ref_dir = ref_file.getParent()
+    def ref_name = ref_file.getName()
+    def ref_base_name = ref_name.replaceFirst(/\\.gz$/, '').replaceFirst(/\\.fasta$/, '').replaceFirst(/\\.fa$/, '') // Handle .fa, .fasta, .gz extensions
+
+    def ref_dict_path = file("${ref_dir}/${ref_base_name}.dict")
+    def ref_fai_path = file("${ref_dir}/${ref_name}.fai") // FAI should match original extension
+
+    REFERENCE_INDEX (
+        ch_ref_input
+            .map { ref -> tuple(ref, ref_dict_path, ref_fai_path) } // Pass ref path and target index/dict paths
+    )
+    ch_indexed_reference = REFERENCE_INDEX.out.indexed_ref // [ref_genome, ref_genome_dict, ref_genome_fasta_index]
+
+    // --- Step 1: Extract FASTQ Metadata ---
+    EXTRACT_FASTQ_METADATA(ch_reads)
+
+    // --- Step 2: Read Trimming ---
+    FASTP_TRIM(ch_reads)
+
+    // --- Step 3: Alignment ---
+    // BWAMEM2_ALIGN expects [meta, reads, ref, rg_info]
+    // ch_indexed_reference provides [ref_genome, ref_genome_dict, ref_genome_fasta_index]
+    ch_align_input = FASTP_TRIM.out.trimmed_reads
+        .join(EXTRACT_FASTQ_METADATA.out.rg_info) // [meta, reads, rg_info]
+        .combine(ch_indexed_reference.map{ ref, dict, fai -> ref }) // Combine with just the ref path from indexed_ref
+        .map { meta, reads, rg_info, ref -> [meta, reads, ref, rg_info] } // Reorder for BWAMEM2_ALIGN
+
+    BWAMEM2_ALIGN(ch_align_input)
+
+    // --- Step 4: SAMtools Processing ---
     SAMTOOLS_PROCESS(BWAMEM2_ALIGN.out.bam_files)
-    
-    // Wait for all samples to complete processing before running variant calling
-    // Combine with reference genome for GATK
-    SAMTOOLS_PROCESS.out.processed_bam
-        .combine(REFERENCE_INDEX.out.indexed_ref.first())
-        .map { sample_id, bam, ref, dict, fai -> [sample_id, bam, ref] }
-        .set { all_processed_bams_with_ref }
-    
-    // Variant calling with reference genome
-    GATK_HAPLOTYPECALLER(all_processed_bams_with_ref)
-    
-    // Collect all GVCF files for joint genotyping
-    GATK_HAPLOTYPECALLER.out.gvcfs
-        .map { sample_id, gvcf, idx -> gvcf }
-        .collect()
-        .set { all_gvcfs }
-    
-    // Get reference for joint genotyping
-    REFERENCE_INDEX.out.indexed_ref
-        .first()
-        .map { ref, dict, fai -> [ref, dict, fai] }
-        .set { indexed_ref_for_gatk }
-    
-    // Joint genotyping and filtering
-    GATK_JOINT_GENOTYPE(all_gvcfs, indexed_ref_for_gatk)
-    
-    // Population genetics analysis
-    PLINK2_ANALYSIS(GATK_JOINT_GENOTYPE.out.filtered_vcf)
+
+    // --- Step 5: Haplotype Calling (per sample, per interval) ---
+    // GATK_HAPLOTYPECALLER expects [meta, bam, interval, ref]
+    ch_haplotype_input = SAMTOOLS_PROCESS.out.processed_bam
+                             .combine(ch_intervals)   // [meta, bam, interval]
+                             .combine(ch_indexed_reference.map{ ref, dict, fai -> ref })   // Combine with just the ref path
+    // Map to ensure correct order: [meta, bam_file, interval, reference]
+    ch_haplotype_input = ch_haplotype_input.map { meta, bam, interval, ref -> tuple(meta, bam, interval, ref) }
+
+    GATK_HAPLOTYPECALLER(ch_haplotype_input)
+
+    // --- Step 6: Prepare for Joint Genotyping (Create Sample Map per Interval) ---
+    ch_gvcf_info = GATK_HAPLOTYPECALLER.out.gvcfs_interval
+        .map { meta, interval, gvcf_path, tbi_path ->
+            // Check if the TBI file actually exists
+            if (file(tbi_path).exists()) {
+                return tuple(interval, tuple(meta.id, gvcf_path)) // Format for grouping: [interval, [sample_id, gvcf_path]]
+            } else {
+                log.warn "Missing index file ${tbi_path} for ${gvcf_path}. Skipping this GVCF for interval ${interval}."
+                return null // Indicate failure
+            }
+        }
+        .filter { it != null } // Remove entries where index was missing
+
+    // Group by interval -> [interval, [[sample1, path1], [sample2, path2], ...]]
+    ch_grouped_gvcf_info = ch_gvcf_info.groupTuple()
+
+    // --- Step 7: Concatenate GVCFs per sample (across intervals) ---
+    // Group GVCFs by sample ID instead of by interval
+    ch_sample_gvcfs = GATK_HAPLOTYPECALLER.out.gvcfs_interval
+        .map { meta, interval, gvcf_path, tbi_path ->
+            return tuple(meta.id, tuple(interval, gvcf_path, tbi_path))
+        }
+        .groupTuple() // Group by sample ID: [sample_id, [[interval1, gvcf1, tbi1], [interval2, gvcf2, tbi2], ...]]
+
+    // Concatenate GVCFs for each sample
+    CONCAT_GVCFS(ch_sample_gvcfs)
+
+    // --- Step 8: Create sample map for joint genotyping ---
+    CREATE_SAMPLE_MAP(ch_grouped_gvcf_info) // Emits: [interval, map_file_path]
+
+    // --- Step 9: Joint Genotyping (per interval) ---
+    ch_joint_genotype_input = CREATE_SAMPLE_MAP.out.sample_map
+                                 .combine(ch_indexed_reference.map{ ref, dict, fai -> ref })  // [interval, map_file, ref_file]
+
+    GATK_JOINT_GENOTYPE(ch_joint_genotype_input)
+
+    // --- Step 10: PLINK2 Analysis ---
+    // Collect all interval VCFs to analyze with PLINK2
+    // For simplicity, use the first interval's VCF for demonstration
+    // In a real scenario, you might want to merge all interval VCFs first
+    PLINK2_ANALYSIS(GATK_JOINT_GENOTYPE.out.filtered_vcf_interval.map { interval, vcf, tbi -> vcf }.first())
+
+    // --- Workflow Output ---
+    ch_final_vcfs = GATK_JOINT_GENOTYPE.out.filtered_vcf_interval
+    ch_final_vcfs.view { interval, vcf, tbi -> "Final VCF for interval ${interval}: ${vcf}" }
 }
 
-// Log workflow completion
+// Workflow Completion Message
 workflow.onComplete {
-    log.info "Pipeline completed at: $workflow.complete"
-    log.info "Execution status: ${ workflow.success ? 'SUCCESS' : 'FAILED' }"
-    log.info "Execution duration: $workflow.duration"
+    log.info ( workflow.success ? """
+        Pipeline execution summary
+        ---------------------------
+        Completed successfully at: ${workflow.complete}
+        Duration               : ${workflow.duration}
+        CPU hours              : ${workflow.cpuHours}
+        Memory Mb-hours        : ${workflow.memoryMbHours}
+        Work directory         : ${workflow.workDir}
+        Output directory       : ${params.outdir}
+        ================================================
+        Pipeline execution finished!
+        """ : """
+        Pipeline execution failed!
+        ---------------------------
+        Error summary: ${workflow.errorReport}
+        Work directory: ${workflow.workDir}
+        Check the log file for details: .nextflow.log
+        ================================================
+        """
+    )
 }

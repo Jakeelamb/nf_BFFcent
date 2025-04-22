@@ -5,12 +5,16 @@ A Nextflow pipeline for variant discovery and population genomics analysis of Bl
 ## Overview
 
 This pipeline performs the following steps:
-- Quality control and trimming of Illumina paired-end reads (FASTP)
-- Read alignment to reference genome (BWA-MEM2)
-- SAM/BAM processing and duplicate marking (Samtools)
-- Variant calling (GATK HaplotypeCaller)
-- Joint genotyping and variant filtering (GATK)
-- Population structure analysis (PLINK2)
+1. Reference Genome Indexing - creates indexes if not already present
+2. FASTQ Metadata Extraction - extract read group information
+3. Quality Control and Trimming - FASTP removes adapters and low-quality bases
+4. Read Alignment - BWA-MEM2 aligns reads to the reference genome
+5. SAM/BAM Processing - Samtools handles sorting, fixmate, and duplicate marking
+6. Variant Calling - GATK HaplotypeCaller generates GVCFs per sample, per interval
+7. GVCF Concatenation - bcftools combines per-interval GVCFs into per-sample GVCFs
+8. Sample Map Creation - prepares sample maps required for joint genotyping
+9. Joint Genotyping - GATK GenotypeGVCFs combines and genotypes per-interval samples
+10. Population Analysis - PLINK2 performs principal component analysis
 
 ## Requirements
 
@@ -105,28 +109,32 @@ nextflow run main.nf \
 
 ### SLURM Parameters
 - `--slurm_account`: SLURM account (optional)
-- `--slurm_partition`: Default SLURM partition (default: 'day-long-cpu')
+- `--slurm_partition`: Default SLURM partition (default: 'amilan')
 - `--slurm_qos`: Default SLURM QOS (optional)
 
 ### Process-specific Parameters
 Each process can have a custom partition and QOS defined:
 - `--fastp_partition`, `--fastp_qos`
 - `--alignment_partition`, `--alignment_qos`
+- `--gatk_haplotype_partition`, `--gatk_haplotype_qos`
+- `--concat_gvcfs_partition`, `--concat_gvcfs_qos`
 - etc.
 
 ## Output Structure
 
 ```
 results/
-├── ref_index/          # Indexed reference genome files
-├── trimming/           # Trimmed FASTQ files and QC reports
-├── alignment/          # Aligned BAM files
-├── readgroups/         # Read group information and summary
-├── samtools/           # Processed BAM files
-├── gatk_haplotype/     # Individual GVCF files
-├── gatk_pipe/          # Joint-called VCF files
-├── plink2/             # Population genetics outputs
-└── pipeline_info/      # Execution reports and logs
+├── ref_index/              # Indexed reference genome files
+├── trimming/               # Trimmed FASTQ files and QC reports
+├── alignment/              # Aligned BAM files
+├── readgroups/             # Read group information and summary
+├── samtools/               # Processed BAM files
+├── gatk_haplotype/         # Individual GVCF files per interval
+├── concatenated_gvcfs/     # Concatenated GVCF files per sample
+├── sample_maps/            # Interval-specific sample maps
+├── gatk_pipe/              # Joint-called VCF files
+├── plink2/                 # Population genetics outputs
+└── pipeline_info/          # Execution reports and logs
 ```
 
 ## Read Group Extraction
@@ -135,13 +143,11 @@ The pipeline automatically extracts read group information from FASTQ headers to
 
 The read group information includes:
 - Sample ID
-- Read Group ID (constructed from sample name, library, flowcell, and lane)
+- Read Group ID (constructed from sample name, flowcell, and lane)
 - Sample Name (SM tag)
 - Library (LB tag)
 - Platform Unit (PU tag, constructed from flowcell, lane, and barcode)
 - Platform (PL tag, set to "Illumina")
-
-A master table with all samples' read group information is generated in the `results/readgroups/` directory after pipeline execution. This file includes validation checks to ensure all necessary information was properly extracted.
 
 ## License
 
