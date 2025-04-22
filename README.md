@@ -64,6 +64,12 @@ If needed, you can temporarily override this setting at runtime:
 nextflow run main.nf --reference_genome /alternate/path/to/genome.fasta
 ```
 
+The pipeline will automatically index the reference genome if the index files don't already exist. You can skip the index check with the `--skip_index_check` parameter if you know the indexes already exist and want a faster startup:
+
+```bash
+nextflow run main.nf --skip_index_check
+```
+
 ### 5. Running the pipeline
 
 Basic usage:
@@ -106,6 +112,7 @@ nextflow run main.nf \
 - `--input`: Path to samples.txt file (default: 'samples.txt')
 - `--outdir`: Output directory (default: './results')
 - `--temp_dir`: Directory for temporary files (default: './temp')
+- `--skip_index_check`: Skip checking for reference genome indexes (default: false)
 
 ### SLURM Parameters
 - `--slurm_account`: SLURM account (optional)

@@ -8,6 +8,7 @@ params.reference_genome = "$projectDir/reference/Zmays_833_Zm-B73-REFERENCE-NAM-
 params.intervals_file = "intervals_chromo_only_nopos.list" // File listing intervals (1-10)
 params.outdir = "./results"
 params.publish_dir_mode = 'copy' // Or 'link', 'rellink', etc.
+params.skip_index_check = false // Option to skip index checking (speeds up initialization)
 
 // Define Log Level
 log.info """\
@@ -17,6 +18,7 @@ log.info """\
          reference_genome   : ${params.reference_genome}
          intervals          : ${params.intervals_file}
          outdir             : ${params.outdir}
+         skip_index_check   : ${params.skip_index_check}
          ------------------------------------------------
          """
          .stripIndent()
@@ -52,21 +54,50 @@ workflow {
     // Reference genome file
     ch_ref_input = Channel.value(file(params.reference_genome, checkIfExists: true))
 
-    // --- Step 0: Index Reference Genome ---
+    // --- Step 0: Index Reference Genome (if needed) ---
     // Create paths for expected index/dict files based on reference genome path
     def ref_file = file(params.reference_genome)
     def ref_dir = ref_file.getParent()
     def ref_name = ref_file.getName()
-    def ref_base_name = ref_name.replaceFirst(/\\.gz$/, '').replaceFirst(/\\.fasta$/, '').replaceFirst(/\\.fa$/, '') // Handle .fa, .fasta, .gz extensions
+    def ref_base_name = ref_name.replaceFirst(/\.gz$/, '').replaceFirst(/\.fasta$/, '').replaceFirst(/\.fa$/, '') // Handle .fa, .fasta, .gz extensions
 
     def ref_dict_path = file("${ref_dir}/${ref_base_name}.dict")
     def ref_fai_path = file("${ref_dir}/${ref_name}.fai") // FAI should match original extension
+    
+    // Get uncompressed name for BWA indexes (index files won't have .gz even if the reference is compressed)
+    def ref_for_bwa_indexes = params.reference_genome.replaceFirst(/\.gz$/, '')
 
-    REFERENCE_INDEX (
-        ch_ref_input
-            .map { ref -> tuple(ref, ref_dict_path, ref_fai_path) } // Pass ref path and target index/dict paths
-    )
-    ch_indexed_reference = REFERENCE_INDEX.out.indexed_ref // [ref_genome, ref_genome_dict, ref_genome_fasta_index]
+    // Flag to check if indexing is needed
+    def indexing_needed = true
+
+    // Skip index checking if requested (useful for repeated runs where indexes are known to exist)
+    if (!params.skip_index_check) {
+        // Check for required index files
+        def required_extensions = ['.amb', '.ann', '.bwt.2bit.64', '.pac', '.sa', '.0123']
+        indexing_needed = required_extensions.any { ext ->
+            !file("${ref_for_bwa_indexes}${ext}").exists()
+        } || !ref_dict_path.exists() || !ref_fai_path.exists()
+        
+        // Log the index paths we're checking
+        log.debug "Checking for reference index files:"
+        required_extensions.each { ext -> log.debug " - ${ref_for_bwa_indexes}${ext}" }
+        log.debug " - ${ref_dict_path}"
+        log.debug " - ${ref_fai_path}"
+    }
+
+    // Run indexing only if needed
+    if (indexing_needed) {
+        log.info "Reference genome index files not found or check requested. Will run indexing."
+        REFERENCE_INDEX(
+            ch_ref_input
+                .map { ref -> tuple(ref, ref_dict_path, ref_fai_path) } // Pass ref path and target index/dict paths
+        )
+        ch_indexed_reference = REFERENCE_INDEX.out.indexed_ref // [ref_genome, ref_genome_dict, ref_genome_fasta_index]
+    } else {
+        log.info "All reference genome index files found. Skipping indexing step."
+        // Create the reference channel directly if indexes exist
+        ch_indexed_reference = Channel.value(tuple(ref_file, ref_dict_path, ref_fai_path))
+    }
 
     // --- Step 1: Extract FASTQ Metadata ---
     EXTRACT_FASTQ_METADATA(ch_reads)
