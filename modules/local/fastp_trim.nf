@@ -22,7 +22,6 @@ process FASTP_TRIM {
         --html ${meta.id}_fastp.html \\
         --json ${meta.id}_fastp.json \\
         --detect_adapter_for_pe \\
-        --dedup \\
         -w ${task.cpus} \\
         -q 20 \\
         --compression 6 \\
